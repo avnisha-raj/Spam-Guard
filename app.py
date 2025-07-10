@@ -30,70 +30,56 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# Load and train models (with caching)
-@st.cache_data
+# Load and train models (optimized)
+@st.cache_resource
 def load_and_train_models():
-    # Load the dataset
-    df = pd.read_csv('spam.csv', encoding='latin-1')
-    
-    # Data cleaning
-    df = df[['v1', 'v2']]
-    df.columns = ['label', 'message']
-    df['label'] = df['label'].map({'ham': 0, 'spam': 1})
-    df = df.dropna()
-    df['message'] = df['message'].apply(clean_text)
-    
-    # Preprocessing
-    X = df['message']
-    y = df['label']
-    
-    vectorizer = TfidfVectorizer(stop_words='english')
-    X_vec = vectorizer.fit_transform(X)
-    
-    # Manual balancing instead of RandomOverSampler
-    # Get minority class count
-    spam_count = sum(y)
-    ham_count = len(y) - spam_count
-    
-    if spam_count < ham_count:
-        # Duplicate spam samples to balance
-        spam_indices = [i for i, label in enumerate(y) if label == 1]
-        additional_samples = ham_count - spam_count
+    try:
+        # Load the dataset
+        df = pd.read_csv('spam.csv', encoding='latin-1')
         
-        # Randomly select spam samples to duplicate
-        np.random.seed(42)
-        duplicate_indices = np.random.choice(spam_indices, additional_samples, replace=True)
+        # Data cleaning
+        df = df[['v1', 'v2']]
+        df.columns = ['label', 'message']
+        df['label'] = df['label'].map({'ham': 0, 'spam': 1})
+        df = df.dropna()
         
-        # Create balanced dataset
-        X_resampled = np.vstack([X_vec.toarray(), X_vec[duplicate_indices].toarray()])
-        y_resampled = np.hstack([y, [1] * additional_samples])
-    else:
-        X_resampled = X_vec.toarray()
-        y_resampled = y.values
-    
-    # Train/test split
-    X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
-    
-    # Models
-    models = {
-        'Naive Bayes': MultinomialNB(),
-        'Logistic Regression': LogisticRegression(max_iter=1000, class_weight='balanced'),
-        'SVM': SVC(kernel='linear', probability=True, class_weight='balanced'),
-        'Random Forest': RandomForestClassifier(n_estimators=100, class_weight='balanced')
-    }
-    
-    # Train models
-    trained_models = {}
-    model_accuracies = {}
-    
-    for name, model in models.items():
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        accuracy = accuracy_score(y_test, y_pred)
-        trained_models[name] = model
-        model_accuracies[name] = accuracy
-    
-    return trained_models, vectorizer, model_accuracies, df
+        # Take smaller sample for faster processing
+        df = df.sample(n=min(1000, len(df)), random_state=42)
+        
+        df['message'] = df['message'].apply(clean_text)
+        
+        # Preprocessing
+        X = df['message']
+        y = df['label']
+        
+        vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
+        X_vec = vectorizer.fit_transform(X)
+        
+        # Simple train/test split without oversampling
+        X_train, X_test, y_train, y_test = train_test_split(X_vec, y, test_size=0.2, random_state=42)
+        
+        # Reduced models for faster training
+        models = {
+            'Naive Bayes': MultinomialNB(),
+            'Logistic Regression': LogisticRegression(max_iter=100, class_weight='balanced', solver='liblinear')
+        }
+        
+        # Train models
+        trained_models = {}
+        model_accuracies = {}
+        
+        for name, model in models.items():
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            accuracy = accuracy_score(y_test, y_pred)
+            trained_models[name] = model
+            model_accuracies[name] = accuracy
+        
+        return trained_models, vectorizer, model_accuracies, df
+        
+    except Exception as e:
+        st.error(f"Error loading models: {str(e)}")
+        return None, None, None, None
 
 # Prediction function
 def predict_message(message, models, vectorizer):
@@ -115,9 +101,12 @@ def main():
     st.title("📧 Spam/Ham Email Classifier")
     st.markdown("---")
     
-    # Load models
-    with st.spinner("Loading models..."):
-        models, vectorizer, accuracies, df = load_and_train_models()
+    # Load models with error handling
+    models, vectorizer, accuracies, df = load_and_train_models()
+    
+    if models is None:
+        st.error("Failed to load models. Please check your dataset.")
+        return
     
     # Sidebar
     st.sidebar.title("📊 Model Performance")
