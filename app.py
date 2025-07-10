@@ -1,7 +1,9 @@
 
 import streamlit as st
 import pandas as pd
-import re
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
@@ -9,88 +11,203 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from imblearn.over_sampling import RandomOverSampler
-import seaborn as sns
-import matplotlib.pyplot as plt
+import re
+import pickle
+import os
+# from imblearn.over_sampling import RandomOverSampler
 
-st.set_page_config(page_title="SMS Spam Classifier", layout="centered")
-st.title("📩 SMS Spam Classifier (ML-Based)")
-st.write("Classify SMS messages as **Spam** or **Ham** using multiple ML models.")
+# Set page config
+st.set_page_config(
+    page_title="Spam/Ham Email Classifier",
+    page_icon="📧",
+    layout="wide"
+)
 
-# ---- Text cleaning ----
+# Function to clean text
 def clean_text(text):
     text = text.lower()
     text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# ---- Load dataset (no cache) ----
-def load_data():
-    df = pd.read_csv("spam.csv", encoding='latin-1')
+# Load and train models (with caching)
+@st.cache_data
+def load_and_train_models():
+    # Load the dataset
+    df = pd.read_csv('spam.csv', encoding='latin-1')
+    
+    # Data cleaning
     df = df[['v1', 'v2']]
     df.columns = ['label', 'message']
     df['label'] = df['label'].map({'ham': 0, 'spam': 1})
+    df = df.dropna()
     df['message'] = df['message'].apply(clean_text)
-    df.dropna(inplace=True)
-    return df
+    
+    # Preprocessing
+    X = df['message']
+    y = df['label']
+    
+    vectorizer = TfidfVectorizer(stop_words='english')
+    X_vec = vectorizer.fit_transform(X)
+    
+    # Manual balancing instead of RandomOverSampler
+    # Get minority class count
+    spam_count = sum(y)
+    ham_count = len(y) - spam_count
+    
+    if spam_count < ham_count:
+        # Duplicate spam samples to balance
+        spam_indices = [i for i, label in enumerate(y) if label == 1]
+        additional_samples = ham_count - spam_count
+        
+        # Randomly select spam samples to duplicate
+        np.random.seed(42)
+        duplicate_indices = np.random.choice(spam_indices, additional_samples, replace=True)
+        
+        # Create balanced dataset
+        X_resampled = np.vstack([X_vec.toarray(), X_vec[duplicate_indices].toarray()])
+        y_resampled = np.hstack([y, [1] * additional_samples])
+    else:
+        X_resampled = X_vec.toarray()
+        y_resampled = y.values
+    
+    # Train/test split
+    X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
+    
+    # Models
+    models = {
+        'Naive Bayes': MultinomialNB(),
+        'Logistic Regression': LogisticRegression(max_iter=1000, class_weight='balanced'),
+        'SVM': SVC(kernel='linear', probability=True, class_weight='balanced'),
+        'Random Forest': RandomForestClassifier(n_estimators=100, class_weight='balanced')
+    }
+    
+    # Train models
+    trained_models = {}
+    model_accuracies = {}
+    
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        accuracy = accuracy_score(y_test, y_pred)
+        trained_models[name] = model
+        model_accuracies[name] = accuracy
+    
+    return trained_models, vectorizer, model_accuracies, df
 
-# ---- Load and preprocess ----
-df = load_data()
-st.subheader("📊 Class Distribution (Before Oversampling)")
-st.bar_chart(df['label'].value_counts().rename(index={0: 'Ham', 1: 'Spam'}))
+# Prediction function
+def predict_message(message, models, vectorizer):
+    message_clean = clean_text(message)
+    message_vec = vectorizer.transform([message_clean])
+    predictions = {}
+    probabilities = {}
+    
+    for name, model in models.items():
+        pred = model.predict(message_vec)[0]
+        prob = model.predict_proba(message_vec)[0][1]  # Probability of spam
+        predictions[name] = 'Spam' if pred == 1 else 'Ham'
+        probabilities[name] = prob
+    
+    return predictions, probabilities
 
-X = df['message']
-y = df['label']
+# Main app
+def main():
+    st.title("📧 Spam/Ham Email Classifier")
+    st.markdown("---")
+    
+    # Load models
+    with st.spinner("Loading models..."):
+        models, vectorizer, accuracies, df = load_and_train_models()
+    
+    # Sidebar
+    st.sidebar.title("📊 Model Performance")
+    for model_name, accuracy in accuracies.items():
+        st.sidebar.metric(model_name, f"{accuracy:.3f}")
+    
+    # Data overview
+    st.sidebar.title("📈 Dataset Overview")
+    st.sidebar.write(f"Total messages: {len(df)}")
+    st.sidebar.write(f"Ham messages: {len(df[df['label'] == 0])}")
+    st.sidebar.write(f"Spam messages: {len(df[df['label'] == 1])}")
+    
+    # Main content
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.header("🔍 Classify Your Message")
+        
+        # Text input
+        user_message = st.text_area(
+            "Enter your message here:",
+            height=150,
+            placeholder="Type your email message here to check if it's spam or ham..."
+        )
+        
+        if st.button("Classify Message", type="primary"):
+            if user_message.strip():
+                predictions, probabilities = predict_message(user_message, models, vectorizer)
+                
+                st.subheader("📋 Classification Results")
+                
+                # Create results dataframe
+                results_df = pd.DataFrame({
+                    'Model': list(predictions.keys()),
+                    'Prediction': list(predictions.values()),
+                    'Spam Probability': [f"{prob:.3f}" for prob in probabilities.values()]
+                })
+                
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Consensus prediction
+                spam_count = sum(1 for pred in predictions.values() if pred == 'Spam')
+                consensus = "Spam" if spam_count >= 2 else "Ham"
+                
+                if consensus == "Spam":
+                    st.error(f"🚨 **Consensus: SPAM** ({spam_count}/4 models agree)")
+                else:
+                    st.success(f"✅ **Consensus: HAM** ({4-spam_count}/4 models agree)")
+                
+                # Probability chart
+                st.subheader("📊 Spam Probability by Model")
+                prob_df = pd.DataFrame({
+                    'Model': list(probabilities.keys()),
+                    'Spam Probability': list(probabilities.values())
+                })
+                
+                fig, ax = plt.subplots(figsize=(10, 6))
+                bars = ax.bar(prob_df['Model'], prob_df['Spam Probability'], 
+                             color=['red' if p > 0.5 else 'green' for p in prob_df['Spam Probability']])
+                ax.set_ylabel('Spam Probability')
+                ax.set_title('Spam Probability by Model')
+                ax.set_ylim(0, 1)
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                st.pyplot(fig)
+                
+            else:
+                st.warning("Please enter a message to classify.")
+    
+    with col2:
+        st.header("ℹ️ About")
+        st.write("""
+        This app uses 4 different machine learning models to classify emails as spam or ham:
+        
+        - **Naive Bayes**: Probabilistic classifier
+        - **Logistic Regression**: Linear classifier
+        - **SVM**: Support Vector Machine
+        - **Random Forest**: Ensemble method
+        
+        The app shows individual predictions and a consensus result.
+        """)
+        
+        st.header("🛠️ Features")
+        st.write("""
+        - Real-time classification
+        - Multiple model comparison
+        - Probability visualization
+        - Consensus prediction
+        - Interactive interface
+        """)
 
-# Vectorize outside any caching to avoid feature mismatch
-vectorizer = TfidfVectorizer(stop_words='english')
-X_vec = vectorizer.fit_transform(X)
-
-# Apply oversampling
-ros = RandomOverSampler(random_state=42)
-X_resampled, y_resampled = ros.fit_resample(X_vec, y)
-
-st.subheader("🔁 Class Distribution (After Oversampling)")
-st.bar_chart(pd.Series(y_resampled).value_counts().rename(index={0: 'Ham', 1: 'Spam'}))
-
-# Train/test split
-X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
-
-# ---- Train models ----
-models = {
-    'Naive Bayes': MultinomialNB(),
-    'Logistic Regression': LogisticRegression(max_iter=1000, class_weight='balanced'),
-    'SVM': SVC(kernel='linear', probability=True, class_weight='balanced'),
-    'Random Forest': RandomForestClassifier(n_estimators=100, class_weight='balanced')
-}
-
-trained_models = {}
-
-st.subheader("📈 Model Performance")
-for name, model in models.items():
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    trained_models[name] = model
-
-    st.markdown(f"### 🔍 {name} — Accuracy: {acc:.4f}")
-    st.text(classification_report(y_test, y_pred, target_names=['Ham', 'Spam']))
-    cm = confusion_matrix(y_test, y_pred)
-    fig, ax = plt.subplots()
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=['Ham', 'Spam'], yticklabels=['Ham', 'Spam'], ax=ax)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    st.pyplot(fig)
-
-# ---- Prediction Interface ----
-st.subheader("🧪 Try It Yourself")
-user_input = st.text_area("Enter your SMS message:")
-if user_input:
-    cleaned = clean_text(user_input)
-    vec = vectorizer.transform([cleaned])
-    st.markdown("### 🤖 Predictions")
-    for name, model in trained_models.items():
-        pred = model.predict(vec)[0]
-        label = "🚫 Spam" if pred == 1 else "✅ Ham"
-        st.write(f"- **{name}**: {label}")
+if __name__ == "__main__":
+    main()
