@@ -1,7 +1,11 @@
+from google.colab import files
+uploaded = files.upload()
 
-import streamlit as st
+# Import libraries
 import pandas as pd
-import re
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
@@ -9,91 +13,112 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import re
+
+# For oversampling
 from imblearn.over_sampling import RandomOverSampler
-import matplotlib.pyplot as plt
-import seaborn as sns
 
-st.set_page_config(page_title="SMS Spam Classifier", layout="centered")
-st.title("📩 SMS Spam Classifier using ML")
-st.write("Upload the **spam.csv** dataset and classify SMS as Spam or Ham using multiple models.")
+# Load the dataset (assumes you uploaded spam.csv)
+df = pd.read_csv('spam.csv', encoding='latin-1')
 
-# Text cleaning function
+# Data cleaning: Keep only the necessary columns
+df = df[['v1', 'v2']]
+df.columns = ['label', 'message']
+
+# Map labels to binary
+df['label'] = df['label'].map({'ham': 0, 'spam': 1})
+
+# Remove missing values
+df = df.dropna()
+
+# Function to clean text
 def clean_text(text):
     text = text.lower()
     text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# Upload file
-uploaded_file = st.file_uploader("Upload your spam.csv file", type=["csv"])
+df['message'] = df['message'].apply(clean_text)
 
-if uploaded_file:
-    # Load and clean data
-    df = pd.read_csv(uploaded_file, encoding='latin-1')
-    df = df[['v1', 'v2']]
-    df.columns = ['label', 'message']
-    df['label'] = df['label'].map({'ham': 0, 'spam': 1})
-    df.dropna(inplace=True)
-    df['message'] = df['message'].apply(clean_text)
+# EDA: Show class distribution
+print("Label distribution before balancing:")
+print(df['label'].value_counts())
 
-    # Show class distribution before balancing
-    st.subheader("Class Distribution Before Balancing")
-    st.bar_chart(df['label'].value_counts().rename(index={0: 'Ham', 1: 'Spam'}))
+# Plot class distribution
+sns.countplot(x='label', data=df)
+plt.title('Spam vs Ham (Before Balancing)')
+plt.xticks([0, 1], ['Ham', 'Spam'])
+plt.show()
 
-    # Vectorization
-    X = df['message']
-    y = df['label']
-    vectorizer = TfidfVectorizer(stop_words='english')
-    X_vec = vectorizer.fit_transform(X)
+# Preprocessing: TF-IDF Vectorization
+X = df['message']
+y = df['label']
 
-    # Oversampling
-    ros = RandomOverSampler(random_state=42)
-    X_resampled, y_resampled = ros.fit_resample(X_vec, y)
+vectorizer = TfidfVectorizer(stop_words='english')
+X_vec = vectorizer.fit_transform(X)
 
-    st.subheader("Class Distribution After Oversampling")
-    st.bar_chart(pd.Series(y_resampled).value_counts().rename(index={0: 'Ham', 1: 'Spam'}))
+# Oversample the minority class
+ros = RandomOverSampler(random_state=42)
+X_resampled, y_resampled = ros.fit_resample(X_vec, y)
 
-    # Train/test split
-    X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
+# Show new class distribution
+print("Label distribution after balancing:")
+print(pd.Series(y_resampled).value_counts())
 
-    # Models
-    models = {
-        'Naive Bayes': MultinomialNB(),
-        'Logistic Regression': LogisticRegression(max_iter=1000, class_weight='balanced'),
-        'SVM': SVC(kernel='linear', probability=True, class_weight='balanced'),
-        'Random Forest': RandomForestClassifier(n_estimators=100, class_weight='balanced')
-    }
+# Plot new class distribution
+sns.countplot(x=y_resampled)
+plt.title('Spam vs Ham (After Oversampling)')
+plt.xticks([0, 1], ['Ham', 'Spam'])
+plt.show()
 
-    trained_models = {}
+# Train/test split
+X_train, X_test, y_train, y_test = train_test_split(X_resampled, y_resampled, test_size=0.2, random_state=42)
 
-    st.subheader("Model Performance")
+# Model building (using class_weight='balanced' where supported)
+models = {
+    'Naive Bayes': MultinomialNB(),
+    'Logistic Regression': LogisticRegression(max_iter=1000, class_weight='balanced'),
+    'SVM': SVC(kernel='linear', probability=True, class_weight='balanced'),
+    'Random Forest': RandomForestClassifier(n_estimators=100, class_weight='balanced')
+}
+
+# Train and evaluate models
+for name, model in models.items():
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    print(f"\nModel: {name}")
+    print("Accuracy:", accuracy_score(y_test, y_pred))
+    print("Classification Report:\n", classification_report(y_test, y_pred, target_names=['Ham', 'Spam']))
+    cm = confusion_matrix(y_test, y_pred)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Ham', 'Spam'], yticklabels=['Ham', 'Spam'])
+    plt.title(f'Confusion Matrix - {name}')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.show()
+
+# User-interactive prediction
+print("\n--- Spam/Ham Message Classifier ---")
+print("Type your message and press Enter to classify. Type 'exit' to quit.\n")
+
+def predict_message(message):
+    message_clean = clean_text(message)
+    message_vec = vectorizer.transform([message_clean])
+    predictions = {}
     for name, model in models.items():
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        acc = accuracy_score(y_test, y_pred)
-        trained_models[name] = model
+        pred = model.predict(message_vec)[0]
+        predictions[name] = 'Spam' if pred == 1 else 'Ham'
+    return predictions
 
-        st.markdown(f"### {name} — Accuracy: `{acc:.4f}`")
-        st.text(classification_report(y_test, y_pred, target_names=['Ham', 'Spam']))
+while True:
+    user_input = input("Enter a message: ")
+    if user_input.lower() == 'exit':
+        print("Exiting classifier. Goodbye!")
+        break
+    preds = predict_message(user_input)
+    print("Predictions:")
+    for model_name, pred in preds.items():
+        print(f"  {model_name}: {pred}")
+    print()
 
-        # Confusion matrix
-        cm = confusion_matrix(y_test, y_pred)
-        fig, ax = plt.subplots()
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Ham', 'Spam'], yticklabels=['Ham', 'Spam'], ax=ax)
-        ax.set_xlabel("Predicted")
-        ax.set_ylabel("Actual")
-        ax.set_title(f"Confusion Matrix — {name}")
-        st.pyplot(fig)
 
-    # User input for prediction
-    st.subheader("🧪 Test Your Own SMS")
-    user_input = st.text_area("Enter your SMS here:")
 
-    if user_input:
-        cleaned = clean_text(user_input)
-        vec = vectorizer.transform([cleaned])
-        st.markdown("### 🤖 Predictions")
-        for name, model in trained_models.items():
-            pred = model.predict(vec)[0]
-            result = "🚫 Spam" if pred == 1 else "✅ Ham"
-            st.write(f"- **{name}**: {result}")
