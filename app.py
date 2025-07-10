@@ -1,6 +1,6 @@
 from google.colab import files
 uploaded = files.upload()
-
+!pip install -q imbalanced-learn
 # Import libraries
 import pandas as pd
 import numpy as np
