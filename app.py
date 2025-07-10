@@ -134,45 +134,32 @@ def main():
         
         if st.button("Classify Message", type="primary"):
             if user_message.strip():
-                predictions, probabilities = predict_message(user_message, models, vectorizer)
-                
-                st.subheader("📋 Classification Results")
-                
-                # Create results dataframe
-                results_df = pd.DataFrame({
-                    'Model': list(predictions.keys()),
-                    'Prediction': list(predictions.values()),
-                    'Spam Probability': [f"{prob:.3f}" for prob in probabilities.values()]
-                })
-                
-                st.dataframe(results_df, use_container_width=True)
-                
-                # Consensus prediction
-                spam_count = sum(1 for pred in predictions.values() if pred == 'Spam')
-                consensus = "Spam" if spam_count >= 2 else "Ham"
-                
-                if consensus == "Spam":
-                    st.error(f"🚨 **Consensus: SPAM** ({spam_count}/4 models agree)")
-                else:
-                    st.success(f"✅ **Consensus: HAM** ({4-spam_count}/4 models agree)")
-                
-                # Probability chart
-                st.subheader("📊 Spam Probability by Model")
-                prob_df = pd.DataFrame({
-                    'Model': list(probabilities.keys()),
-                    'Spam Probability': list(probabilities.values())
-                })
-                
-                fig, ax = plt.subplots(figsize=(10, 6))
-                bars = ax.bar(prob_df['Model'], prob_df['Spam Probability'], 
-                             color=['red' if p > 0.5 else 'green' for p in prob_df['Spam Probability']])
-                ax.set_ylabel('Spam Probability')
-                ax.set_title('Spam Probability by Model')
-                ax.set_ylim(0, 1)
-                plt.xticks(rotation=45)
-                plt.tight_layout()
-                st.pyplot(fig)
-                
+                with st.spinner("Classifying..."):
+                    try:
+                        predictions, probabilities = predict_message(user_message, models, vectorizer)
+                        
+                        st.subheader("📋 Classification Results")
+                        
+                        # Show results immediately
+                        for model_name, prediction in predictions.items():
+                            if prediction == "Spam":
+                                st.error(f"🚨 **{model_name}**: {prediction} (Probability: {probabilities[model_name]:.3f})")
+                            else:
+                                st.success(f"✅ **{model_name}**: {prediction} (Probability: {probabilities[model_name]:.3f})")
+                        
+                        # Quick consensus without complex charts
+                        spam_count = sum(1 for pred in predictions.values() if pred == 'Spam')
+                        consensus = "Spam" if spam_count >= 1 else "Ham"  # Changed from >= 2 to >= 1
+                        
+                        st.markdown("---")
+                        if consensus == "Spam":
+                            st.error(f"🚨 **Final Result: SPAM** ({spam_count}/{len(predictions)} models agree)")
+                        else:
+                            st.success(f"✅ **Final Result: HAM** ({len(predictions)-spam_count}/{len(predictions)} models agree)")
+                            
+                    except Exception as e:
+                        st.error(f"Error during classification: {str(e)}")
+                        
             else:
                 st.warning("Please enter a message to classify.")
     
