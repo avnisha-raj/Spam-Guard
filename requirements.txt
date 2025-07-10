@@ -1,7 +1,6 @@
 streamlit
 pandas
-numpy
-scikit-learn
+scikit-learn>=1.1
 imblearn
-seaborn
 matplotlib
+seaborn
